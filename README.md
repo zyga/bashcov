@@ -3,7 +3,7 @@
 Using `bashcov` you can run a bash script and measure execution coverage. This
 can be useful for writing and measuring unit tests for bash programs.
 
-# Example:
+## Example:
 
 Using bashcov on itself, to print the help message and quit:
 
