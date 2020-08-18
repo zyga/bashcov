@@ -1,0 +1,61 @@
+#!/bin/bash
+# Copyright 2020 Zygmunt Krynicki.
+#
+# This file is part of bashcov.
+#
+# Bashcov is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License.
+#
+# Bashcov is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Bashcov.  If not, see <https://www.gnu.org/licenses/>.
+
+declare -A -i cov_files  # set of files encountered
+declare -A -i cov_lines  # set of file:line pairs executed
+
+main() {
+	if [ $# -eq 0 ]; then
+		echo "usage: bashcov SCRIPT [ARGUMENTS]"
+		exit 0
+	fi
+
+	local trace_file
+	local fname
+	local line
+	local lineno
+
+	trace_file="$(mktemp bashcov.XXXXXXXXXX)"
+	# shellcheck disable=SC2064
+	trap "rm -f $trace_file" EXIT
+	PS4='+$BASH_SOURCE:$LINENO#' BASH_XTRACEFD=3 bash -x "$@" 3>"$trace_file"
+
+	while IFS= read -r line; do
+		# Strip the command being executed after "#"
+		line="${line%%#*}"
+		# Strip leading "+" characters, indicating indirection depth.
+		# Given that we want to strip exactly /[+]+/ we use extglob for that.
+		shopt -s extglob
+		line="${line##+(+)}"
+		shopt -u extglob
+		# Extract file name and line number separated by a colon.
+		fname="${line%%:*}"
+		lineno="${line##*:}"
+		cov_files[$fname]=1
+		cov_lines[$fname:$lineno]=$(( "${cov_lines[$fname:$lineno]}" + 1 ))
+	done <"$trace_file"
+
+	for fname in "${!cov_files[@]}"; do
+		lineno=0
+		while IFS= read -r line; do
+			lineno=$((lineno + 1))
+			printf "%3s: %s\n" "${cov_lines[$fname:$lineno]:--}" "$line" 
+		done <"$fname" >"$fname.coverage"
+	done
+}
+
+main "$@"
