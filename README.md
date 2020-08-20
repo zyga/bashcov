@@ -1,4 +1,19 @@
-# bashcov - execution coverage for bash scripts
+# bashcov and bashunit - unit testing for bash
+
+This repository contains two tools. `bashcov` is a generic execution coverage
+tracer for bash. It can be used to examine code coverage of arbitrary script
+executions. `bashunit` executes unit tests from files matching `*_test.sh`, and
+generates coverage analysis for all the tested scripts.
+
+## bashunit - unit testing for bash scripts
+
+Using `bashunit` you can create practical unit tests for bash programs. Using
+built-in coverage analysis and convention-based code organization, you can
+incrementally integrate test code into an existing shell project.
+
+Please review the unit tests for `bashcov` as an example.
+
+## bashcov - execution coverage for bash scripts
 
 Using `bashcov` you can run a bash script and measure execution coverage. This
 can be useful for writing and measuring unit tests for bash programs.

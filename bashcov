@@ -16,24 +16,15 @@
 # along with Bashcov.  If not, see <https://www.gnu.org/licenses/>.
 
 declare -A -i cov_files  # set of files encountered
-declare -A -i cov_lines  # set of file:line pairs executed
+declare -A -i cov_lines  # count of file:line pairs executed
 
-main() {
-	if [ $# -eq 0 ]; then
-		echo "usage: bashcov SCRIPT [ARGUMENTS]"
-		exit 0
-	fi
-
-	local trace_file
+# bashcov_parse_trace parses trace given on stdin.
+#
+# Traces for files matching *_test.sh are ignored.
+bashcov_parse_trace() {
 	local fname
 	local line
 	local lineno
-
-	trace_file="$(mktemp bashcov.XXXXXXXXXX)"
-	# shellcheck disable=SC2064
-	trap "rm -f $trace_file" EXIT
-	PS4='+$BASH_SOURCE:$LINENO#' BASH_XTRACEFD=3 bash -x "$@" 3>"$trace_file"
-
 	while IFS= read -r line; do
 		# Strip the command being executed after "#"
 		line="${line%%#*}"
@@ -44,18 +35,83 @@ main() {
 		shopt -u extglob
 		# Extract file name and line number separated by a colon.
 		fname="${line%%:*}"
-		lineno="${line##*:}"
-		cov_files[$fname]=1
-		cov_lines[$fname:$lineno]=$(( "${cov_lines[$fname:$lineno]}" + 1 ))
-	done <"$trace_file"
+		case "$fname" in
+			*_test.sh)
+				# Computing coverage of *_test.sh files is not useful.
+				continue
+				;;
+			'')
+				# Skip trace lines corresponding to unknown files.
+				# Those correspond to bash -c "..." statements.
+				continue
+				;;
+			*)
+				lineno="${line##*:}"
+				cov_files[$fname]=1
+				cov_lines[$fname:$lineno]=$(( "${cov_lines[$fname:$lineno]}" + 1 ))
+				;;
+		esac
+	done
+}
 
+# bashcov_trace_call uses a sub-shell to source a script and executes arbitrary command with tracing
+bashcov_trace_call() {
+	local trace_file
+	local script
+
+	trace_file="$1"
+	script="$2"
+	shift 2
+
+	(
+		BASH_XTRACEFD=3
+		PS4='+$BASH_SOURCE:$LINENO# '
+		set -e
+		set -x
+		# shellcheck disable=SC1090
+		. "$script"
+		"$@"
+	) 3>"$trace_file"
+}
+
+# bashcov_trace_exec executes a bash script with tracing
+bashcov_trace_exec() {
+	local trace_file
+	local retval
+	trace_file="$(mktemp --tmpdir bashcov.XXXXXXXXXX)"
+	# shellcheck disable=SC2064
+	trap "rm -f $trace_file" RETURN
+	(
+		BASH_XTRACEFD=3 PS4='+$BASH_SOURCE:$LINENO# ' bash -x "$@"
+	) 3>"$trace_file"
+	retval=$?
+	bashcov_parse_trace <"$trace_file"
+	return $retval
+}
+
+# bashcov_render uses cov_files and cov_lines to create .coverage files.
+bashcov_render() {
+	local fname
+	local lineno
 	for fname in "${!cov_files[@]}"; do
 		lineno=0
-		while IFS= read -r line; do
+		test -f "$fname" && while IFS= read -r line; do
 			lineno=$((lineno + 1))
-			printf "%3s: %s\n" "${cov_lines[$fname:$lineno]:--}" "$line" 
+			printf "%3s: %s\n" "${cov_lines[$fname:$lineno]:--}" "$line"
 		done <"$fname" >"$fname.coverage"
 	done
 }
 
-main "$@"
+bashcov_main() {
+	if [ $# -eq 0 ]; then
+		echo "usage: bashcov SCRIPT [ARGUMENTS]"
+		return 0 
+	fi
+	bashcov_trace_exec "$@"
+	bashcov_render
+}
+
+# When we are executed (as opposed to being sourced), run main.
+if [ "${0##*/}" = bashcov ]; then
+	bashcov_main "$@"
+fi

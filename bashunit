@@ -1,0 +1,95 @@
+#!/bin/bash
+# Copyright 2020 Zygmunt Krynicki.
+#
+# This file is part of bashcov.
+#
+# Bashcov is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License.
+#
+# Bashcov is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Bashcov.  If not, see <https://www.gnu.org/licenses/>.
+
+. bashcov
+
+# bashunit_run_tests runs all the functions starting with "test_"
+bashunit_run_tests() {
+	local trace_dir="$1"
+	local script="$2"
+	local def
+	local name
+	local debug_line
+	local retval
+
+	echo "bashunit: sourcing $script"
+	# shellcheck disable=SC1090
+	( . "$script" && declare -F ) | while IFS= read -r def; do
+		name="${def##declare -f }"
+		case "$name" in
+			test_*)
+				echo "bashunit: calling $name"
+				# Run each test in a separate shell for isolation and for
+				# better output control. The actual test function runs under
+				# tracing which is displayed on failure.
+				bashcov_trace_call "$trace_dir/$script.$name.xtrace" "$script" "$name" &>"$trace_dir/$script.$name.log"
+				retval=$?
+				if [ "$retval" -ne 0 ]; then
+					echo "bashunit: calling $name resulted in exit code $retval" >&2
+					if [ -s "$trace_dir/$script.$name.log" ]; then
+						echo "bashunit: output of execution of $name" >&2
+						while IFS= read -r debug_line; do
+							echo "bashunit:    $debug_line" >&2
+						done < "$trace_dir/$script.$name.log"
+					fi
+					echo "bashunit: trace of execution of $name" >&2
+				    while IFS= read -r debug_line; do
+						# Show only the subset of the trace relevant to the
+						# script file and strip the non-standard trace prefix.
+						if [[ $debug_line =~ [+]+$script:[0-9]+# ]]; then
+							shopt -s extglob
+							debug_line="${debug_line/$script:+([0-9])#}"
+							shopt -u extglob
+							echo "bashunit:    $debug_line" >&2
+						fi
+					done < "$trace_dir/$script.$name.xtrace"
+					return "$retval"
+				fi
+				;;
+		esac
+	done
+}
+
+bashunit_main() {
+	local trace_dir
+	local trace_file
+	local script
+	local retval
+
+	trace_dir="$(mktemp --tmpdir -d bashunit.XXXXXXXXXX)"
+	# shellcheck disable=SC2064
+	trap "rm -rf $trace_dir" RETURN
+
+	retval=0
+	for script in *_test.sh; do
+		bashunit_run_tests "$trace_dir" "$script"
+		retval=$((retval | $?))
+	done
+	shopt -s nullglob
+	for trace_file in "$trace_dir"/*.xtrace; do
+		bashcov_parse_trace < "$trace_file"
+	done
+	shopt -u nullglob
+	rm -f "*.coverage"
+	bashcov_render
+	return "$retval"
+}
+
+# When we are executed (as opposed to being sourced), run main.
+if [ "${0##*/}" = bashunit ]; then
+	bashunit_main "$@"
+fi
