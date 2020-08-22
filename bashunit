@@ -15,7 +15,77 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Bashcov.  If not, see <https://www.gnu.org/licenses/>.
 
-. bashcov
+declare -A -i cov_files  # set of files encountered
+declare -A -i cov_lines  # count of file:line pairs executed
+
+# bashunit_parse_trace parses trace given on stdin.
+#
+# Traces for files matching *_test.sh are ignored.
+bashunit_parse_trace() {
+	local fname
+	local line
+	local lineno
+	while IFS= read -r line; do
+		# Strip the command being executed after "#"
+		line="${line%%#*}"
+		# Strip leading "+" characters, indicating indirection depth.
+		# Given that we want to strip exactly /[+]+/ we use extglob for that.
+		shopt -s extglob
+		line="${line##+(+)}"
+		shopt -u extglob
+		# Extract file name and line number separated by a colon.
+		fname="${line%%:*}"
+		case "$fname" in
+			*_test.sh)
+				# Computing coverage of *_test.sh files is not useful.
+				continue
+				;;
+			'')
+				# Skip trace lines corresponding to unknown files.
+				# Those correspond to bash -c "..." statements.
+				continue
+				;;
+			*)
+				lineno="${line##*:}"
+				cov_files[$fname]=1
+				cov_lines[$fname:$lineno]=$(( "${cov_lines[$fname:$lineno]}" + 1 ))
+				;;
+		esac
+	done
+}
+
+# bashunit_trace_call uses a sub-shell to source a script and executes arbitrary command with tracing
+bashunit_trace_call() {
+	local trace_file
+	local script
+
+	trace_file="$1"
+	script="$2"
+	shift 2
+
+	(
+		BASH_XTRACEFD=3
+		PS4='+$BASH_SOURCE:$LINENO# '
+		set -e
+		set -x
+		# shellcheck disable=SC1090
+		. "$script"
+		"$@"
+	) 3>"$trace_file"
+}
+
+# bashunit_render_coverage uses cov_files and cov_lines to create .coverage files.
+bashunit_render_coverage() {
+	local fname
+	local lineno
+	for fname in "${!cov_files[@]}"; do
+		lineno=0
+		test -f "$fname" && while IFS= read -r line; do
+			lineno=$((lineno + 1))
+			printf "%3s: %s\\n" "${cov_lines[$fname:$lineno]:--}" "$line"
+		done <"$fname" >"$fname.coverage"
+	done
+}
 
 # bashunit_run_tests runs all the functions starting with "test_"
 bashunit_run_tests() {
@@ -36,7 +106,7 @@ bashunit_run_tests() {
 				# Run each test in a separate shell for isolation and for
 				# better output control. The actual test function runs under
 				# tracing which is displayed on failure.
-				bashcov_trace_call "$trace_dir/$script.$name.xtrace" "$script" "$name" &>"$trace_dir/$script.$name.log"
+				bashunit_trace_call "$trace_dir/$script.$name.xtrace" "$script" "$name" &>"$trace_dir/$script.$name.log"
 				retval=$?
 				if [ "$retval" -ne 0 ]; then
 					echo "bashunit: calling $name resulted in exit code $retval" >&2
@@ -81,11 +151,11 @@ bashunit_main() {
 	done
 	shopt -s nullglob
 	for trace_file in "$trace_dir"/*.xtrace; do
-		bashcov_parse_trace < "$trace_file"
+		bashunit_parse_trace < "$trace_file"
 	done
 	shopt -u nullglob
 	rm -f "*.coverage"
-	bashcov_render
+	bashunit_render_coverage
 	return "$retval"
 }
 
