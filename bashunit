@@ -80,10 +80,11 @@ bashunit_render_coverage() {
 	local lineno
 	for fname in "${!cov_files[@]}"; do
 		lineno=0
+		mkdir -p ./"$(dirname "$fname")"
 		test -f "$fname" && while IFS= read -r line; do
 			lineno=$((lineno + 1))
 			printf "%3s: %s\\n" "${cov_lines[$fname:$lineno]:--}" "$line"
-		done <"$fname" >"$fname.coverage"
+		done <"$fname" >./"$fname.coverage"
 	done
 }
 
