@@ -18,10 +18,7 @@
 declare -A -i cov_files  # set of files encountered
 declare -A -i cov_lines  # count of file:line pairs executed
 
-
-
-# junit log, where each entry is prefixed with a single character
-# class/code, followed by a colon and space. Available codes:
+# junit log file, if junit logging is captured
 declare junit_log=${junit_log:=/dev/null}
 
 # bashunit_parse_trace parses trace given on stdin.
@@ -106,30 +103,38 @@ bashunit_run_tests() {
 	local name
 	local debug_line
 	local retval
+	local final_retval
+	local total_count=0
+	local error_count=0
 
 	echo "bashunit: sourcing $script"
-	echo "S: $script" >>"$junit_log"
+	echo "s: $script" >>"$junit_log"
 	# shellcheck disable=SC1090
-	( . "$script" && declare -F ) | while IFS= read -r def; do
+	while IFS= read -r def; do
 		name="${def##declare -f }"
 		case "$name" in
 			test_*)
+				((++total_count))
+				echo "c: $name" >>"$junit_log"
 				echo "bashunit: calling $name"
-				echo "C: $name" >>"$junit_log"
 				# Run each test in a separate shell for isolation and for
 				# better output control. The actual test function runs under
 				# tracing which is displayed on failure.
 				bashunit_trace_call "$trace_dir/$script.$name.xtrace" "$script" "$name" &>"$trace_dir/$script.$name.log"
 				retval=$?
+				final_retval=$((final_retval | retval))
 				if [ "$retval" -ne 0 ]; then
+					((++error_count))
+					echo "f:" >>"$junit_log"
 					echo "bashunit: calling $name resulted in exit code $retval" >&2
-					echo "F: calling $name resulted in exit code $retval" >>"$junit_log"
 					if [ -s "$trace_dir/$script.$name.log" ]; then
 						echo "bashunit: output of execution of $name" >&2
 						while IFS= read -r debug_line; do
 							echo "bashunit:    $debug_line" >&2
-							echo "M: $debug_line" >>"$junit_log"
 						done < "$trace_dir/$script.$name.log"
+						while IFS= read -r debug_line; do
+							echo "M: $debug_line" >>"$junit_log"
+						done < <(tac "$trace_dir/$script.$name.log")
 					fi
 					echo "bashunit: trace of execution of $name" >&2
 					while IFS= read -r debug_line; do
@@ -140,14 +145,24 @@ bashunit_run_tests() {
 							debug_line="${debug_line/$script:+([0-9])#}"
 							shopt -u extglob
 							echo "bashunit:    $debug_line" >&2
-							echo "M: $debug_line" >>"$junit_log"
 						fi
 					done < "$trace_dir/$script.$name.xtrace"
+					while IFS= read -r debug_line; do
+						if [[ $debug_line =~ [+]+$script:[0-9]+# ]]; then
+							shopt -s extglob
+							debug_line="${debug_line/$script:+([0-9])#}"
+							shopt -u extglob
+							echo "M: $debug_line" >>"$junit_log"
+						fi
+					done < <(tac "$trace_dir/$script.$name.xtrace")
+					echo "F: calling $name resulted in exit code $retval" >>"$junit_log"
 				fi
-				return "$retval"
+				echo "C: $name $retval" >>"$junit_log"
 				;;
 		esac
-	done
+	done < <( . "$script" && declare -F )
+	echo "S: $script $total_count $error_count" >>"$junit_log"
+	return "$final_retval"
 }
 
 junit_message() {
@@ -155,7 +170,7 @@ junit_message() {
 }
 
 junit_failure() {
-	printf '\t\t\t<failure message="%s">\n' "$1"
+	printf '\t\t\t<failure type="error" message="%s">\n' "$1"
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			M)
@@ -185,11 +200,15 @@ junit_testcase() {
 }
 
 junit_testsuite() {
-	printf '\t<testsuite name="%s">\n' "$1"
+	local name
+	local retval
+	printf '\t<testsuite class="%s" name="%s" tests="%d" errors="%d" >\n' "$1" "$1" "$2" "$3"
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			C)
-				junit_testcase "${line:3}"
+				name=$(echo "${line:3}" | cut -d ' ' -f 1)
+				retval=$(echo "${line:3}" | cut -d ' ' -f 2)
+				junit_testcase "$name" "$retval"
 				;;
 			*)
 				break
@@ -199,15 +218,20 @@ junit_testsuite() {
 	printf '\t</testsuite>\n'
 }
 
-
 junit_testsuites() {
-	printf '<?xml encoding="UTF-8"?>\n'
-	printf '<testsuites>\n'
 	local line
+	local name
+	local total_count
+	local error_count
+	printf '<?xml encoding="utf-8"?>\n'
+	printf '<testsuites>\n'
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			S)
-				junit_testsuite "${line:3}"
+				name=$(echo "${line:3}" | cut -d ' ' -f 1)
+				total_count=$(echo "${line:3}" | cut -d ' ' -f 2)
+				error_count=$(echo "${line:3}" | cut -d ' ' -f 3)
+				junit_testsuite "$name" "$total_count" "$error_count"
 				;;
 			*)
 				break
@@ -240,7 +264,7 @@ bashunit_main() {
 		retval=$((retval | $?))
 	done
 
-	bashunit_to_junit <bashunit.junit.log >bashunit.junit.xml
+	tac bashunit.junit.log | bashunit_to_junit >bashunit.junit.xml
 
 	shopt -s nullglob
 	for trace_file in "$trace_dir"/*.xtrace; do

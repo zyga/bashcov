@@ -1,6 +1,6 @@
 #!/bin/bash
 
-. bashcov
+. ./bashcov
 
 
 test_bashcov_help_text() {
@@ -37,11 +37,11 @@ test_bashcov_trace_call() {
 	grep -qFx 'i=3' <"$log_file"
 
 	# The trace file contains leading bashcov trace which shows how tracing is configured.
-	grep -E -qx '[+]bashcov:[0-9]+# BASH_XTRACEFD=3' <"$trace_file"
+	grep -E -qx '[+]./bashcov:[0-9]+# BASH_XTRACEFD=3' <"$trace_file"
 	# The . below represents single quote that is easier to handle this way.
-	grep -E -qx '[+]bashcov:[0-9]+# PS4=.[+][$]BASH_SOURCE:[$]LINENO# .' <"$trace_file"
-	grep -E -qx '[+]bashcov:[0-9]+# set -e' <"$trace_file"
-	grep -E -qx '[+]bashcov:[0-9]+# set -x' <"$trace_file"
+	grep -E -qx '[+]./bashcov:[0-9]+# PS4=.[+][$]BASH_SOURCE:[$]LINENO# .' <"$trace_file"
+	grep -E -qx '[+]./bashcov:[0-9]+# set -e' <"$trace_file"
+	grep -E -qx '[+]./bashcov:[0-9]+# set -x' <"$trace_file"
 }
 
 test_bashcov_parse_trace() {
