@@ -18,6 +18,12 @@
 declare -A -i cov_files  # set of files encountered
 declare -A -i cov_lines  # count of file:line pairs executed
 
+
+
+# junit log, where each entry is prefixed with a single character
+# class/code, followed by a colon and space. Available codes:
+declare junit_log=${junit_log:=/dev/null}
+
 # bashunit_parse_trace parses trace given on stdin.
 #
 # Traces for files matching *_test.sh are ignored.
@@ -36,6 +42,11 @@ bashunit_parse_trace() {
 		# Extract file name and line number separated by a colon.
 		fname="${line%%:*}"
 		case "$fname" in
+			/*)
+				# Computing coverage of thins sourced with absolute path
+				# is probably not useful (external programs, etc).
+				continue
+				;;
 			*_test.sh)
 				# Computing coverage of *_test.sh files is not useful.
 				continue
@@ -80,11 +91,10 @@ bashunit_render_coverage() {
 	local lineno
 	for fname in "${!cov_files[@]}"; do
 		lineno=0
-		mkdir -p ./"$(dirname "$fname")"
 		test -f "$fname" && while IFS= read -r line; do
-			lineno=$((lineno + 1))
+			((++lineno))
 			printf "%3s: %s\\n" "${cov_lines[$fname:$lineno]:--}" "$line"
-		done <"$fname" >./"$fname.coverage"
+		done <"$fname" >"$fname.coverage"
 	done
 }
 
@@ -98,12 +108,14 @@ bashunit_run_tests() {
 	local retval
 
 	echo "bashunit: sourcing $script"
+	echo "S: $script" >>"$junit_log"
 	# shellcheck disable=SC1090
 	( . "$script" && declare -F ) | while IFS= read -r def; do
 		name="${def##declare -f }"
 		case "$name" in
 			test_*)
 				echo "bashunit: calling $name"
+				echo "C: $name" >>"$junit_log"
 				# Run each test in a separate shell for isolation and for
 				# better output control. The actual test function runs under
 				# tracing which is displayed on failure.
@@ -111,14 +123,16 @@ bashunit_run_tests() {
 				retval=$?
 				if [ "$retval" -ne 0 ]; then
 					echo "bashunit: calling $name resulted in exit code $retval" >&2
+					echo "F: calling $name resulted in exit code $retval" >>"$junit_log"
 					if [ -s "$trace_dir/$script.$name.log" ]; then
 						echo "bashunit: output of execution of $name" >&2
 						while IFS= read -r debug_line; do
 							echo "bashunit:    $debug_line" >&2
+							echo "M: $debug_line" >>"$junit_log"
 						done < "$trace_dir/$script.$name.log"
 					fi
 					echo "bashunit: trace of execution of $name" >&2
-				    while IFS= read -r debug_line; do
+					while IFS= read -r debug_line; do
 						# Show only the subset of the trace relevant to the
 						# script file and strip the non-standard trace prefix.
 						if [[ $debug_line =~ [+]+$script:[0-9]+# ]]; then
@@ -126,13 +140,85 @@ bashunit_run_tests() {
 							debug_line="${debug_line/$script:+([0-9])#}"
 							shopt -u extglob
 							echo "bashunit:    $debug_line" >&2
+							echo "M: $debug_line" >>"$junit_log"
 						fi
 					done < "$trace_dir/$script.$name.xtrace"
-					return "$retval"
 				fi
+				return "$retval"
 				;;
 		esac
 	done
+}
+
+junit_message() {
+	printf '\t\t\t\t%s\n' "$(printf %s "$1" | sed -e 's/&/&amp;/g' -e 's/</&lt;/g' -e 's/>/&gt;/g')"
+}
+
+junit_failure() {
+	printf '\t\t\t<failure message="%s">\n' "$1"
+	while IFS= read -r line; do
+		case "${line:0:1}" in
+			M)
+				junit_message "${line:3}"
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+	printf '\t\t\t</failure>\n'
+}
+
+junit_testcase() {
+	printf '\t\t<testcase name="%s">\n' "$1"
+	while IFS= read -r line; do
+		case "${line:0:1}" in
+			F)
+				junit_failure "${line:3}"
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+	printf '\t\t</testcase>\n'
+}
+
+junit_testsuite() {
+	printf '\t<testsuite name="%s">\n' "$1"
+	while IFS= read -r line; do
+		case "${line:0:1}" in
+			C)
+				junit_testcase "${line:3}"
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+	printf '\t</testsuite>\n'
+}
+
+
+junit_testsuites() {
+	printf '<?xml encoding="UTF-8"?>\n'
+	printf '<testsuites>\n'
+	local line
+	while IFS= read -r line; do
+		case "${line:0:1}" in
+			S)
+				junit_testsuite "${line:3}"
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+	printf '</testsuites>\n'
+}
+
+bashunit_to_junit() {
+	junit_testsuites
 }
 
 bashunit_main() {
@@ -145,11 +231,17 @@ bashunit_main() {
 	# shellcheck disable=SC2064
 	trap "rm -rf $trace_dir" RETURN
 
+	junit_log=bashunit.junit.log
+	truncate -s 0 "$junit_log"
+
 	retval=0
 	for script in *_test.sh; do
 		bashunit_run_tests "$trace_dir" "$script"
 		retval=$((retval | $?))
 	done
+
+	bashunit_to_junit <bashunit.junit.log >bashunit.junit.xml
+
 	shopt -s nullglob
 	for trace_file in "$trace_dir"/*.xtrace; do
 		bashunit_parse_trace < "$trace_file"
