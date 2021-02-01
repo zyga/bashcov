@@ -172,6 +172,7 @@ junit_message() {
 junit_failure() {
 	printf '\t\t\t<failure type="error" message="%s">\n' "$1"
 	while IFS= read -r line; do
+		printf '<system-err>\n'
 		case "${line:0:1}" in
 			M)
 				junit_message "${line:3}"
@@ -180,12 +181,14 @@ junit_failure() {
 				break
 				;;
 		esac
+		printf '</system-err>\n'
 	done
 	printf '\t\t\t</failure>\n'
 }
 
 junit_testcase() {
-	printf '\t\t<testcase name="%s">\n' "$1"
+	local testcase_name="$1"
+	printf '\t\t<testcase name="%s">\n' "$testcase_name"
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			F)
@@ -200,15 +203,16 @@ junit_testcase() {
 }
 
 junit_testsuite() {
-	local name
-	local retval
-	printf '\t<testsuite class="%s" name="%s" tests="%d" errors="%d" >\n' "$1" "$1" "$2" "$3"
+	local testsuite_name="$1"
+	local total_count="$2"
+	local error_count="$3"
+	printf '\t<testsuite name="%s" tests="%d" errors="%d">\n' "$testsuite_name" "$total_count" "$error_count"
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			C)
-				name=$(echo "${line:3}" | cut -d ' ' -f 1)
-				retval=$(echo "${line:3}" | cut -d ' ' -f 2)
-				junit_testcase "$name" "$retval"
+				local testcase_name
+				testcase_name=$(echo "${line:3}" | cut -d ' ' -f 1)
+				junit_testcase "$testcase_name"
 				;;
 			*)
 				break
@@ -219,19 +223,19 @@ junit_testsuite() {
 }
 
 junit_testsuites() {
-	local line
-	local name
-	local total_count
-	local error_count
-	printf '<?xml encoding="utf-8"?>\n'
+	printf '<?xml version="1.0" encoding="UTF-8"?>\n'
 	printf '<testsuites>\n'
+	local line
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			S)
-				name=$(echo "${line:3}" | cut -d ' ' -f 1)
+				local testsuite_name
+				local total_count
+				local error_count
+				testsuite_name=$(echo "${line:3}" | cut -d ' ' -f 1)
 				total_count=$(echo "${line:3}" | cut -d ' ' -f 2)
 				error_count=$(echo "${line:3}" | cut -d ' ' -f 3)
-				junit_testsuite "$name" "$total_count" "$error_count"
+				junit_testsuite "$testsuite_name" "$total_count" "$error_count"
 				;;
 			*)
 				break
