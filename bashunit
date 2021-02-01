@@ -133,7 +133,7 @@ bashunit_run_tests() {
 							echo "bashunit:    $debug_line" >&2
 						done < "$trace_dir/$script.$name.log"
 						while IFS= read -r debug_line; do
-							echo "M: $debug_line" >>"$junit_log"
+							echo "O: $debug_line" >>"$junit_log"
 						done < <(tac "$trace_dir/$script.$name.log")
 					fi
 					echo "bashunit: trace of execution of $name" >&2
@@ -152,7 +152,7 @@ bashunit_run_tests() {
 							shopt -s extglob
 							debug_line="${debug_line/$script:+([0-9])#}"
 							shopt -u extglob
-							echo "M: $debug_line" >>"$junit_log"
+							echo "E: $debug_line" >>"$junit_log"
 						fi
 					done < <(tac "$trace_dir/$script.$name.xtrace")
 					echo "F: calling $name resulted in exit code $retval" >>"$junit_log"
@@ -171,18 +171,43 @@ junit_message() {
 
 junit_failure() {
 	printf '\t\t\t<failure type="error" message="%s">\n' "$1"
+	local has_stdout
+	local has_stderr
 	while IFS= read -r line; do
-		printf '<system-err>\n'
 		case "${line:0:1}" in
-			M)
+			O)
+				if [ -n "$has_stderr" ]; then
+					printf '\t\t\t\t</system-err>\n'
+					has_stderr=
+				fi
+				if [ -z "$has_stdout" ]; then
+					printf '\t\t\t\t<system-out>\n'
+					has_stdout=yes
+				fi
+				junit_message "${line:3}"
+				;;
+			E)
+				if [ -n "$has_stdout" ]; then
+					printf '\t\t\t\t</system-out>\n'
+					has_stdout=
+				fi
+				if [ -z "$has_stderr" ]; then
+					printf '\t\t\t\t<system-err>\n'
+					has_stderr=yes
+				fi
 				junit_message "${line:3}"
 				;;
 			*)
 				break
 				;;
 		esac
-		printf '</system-err>\n'
 	done
+	if [ -n "$has_stdout" ]; then
+		printf '\t\t\t\t</system-out>\n'
+	fi
+	if [ -n "$has_stderr" ]; then
+		printf '\t\t\t\t</system-err>\n'
+	fi
 	printf '\t\t\t</failure>\n'
 }
 
