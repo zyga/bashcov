@@ -212,8 +212,9 @@ junit_failure() {
 }
 
 junit_testcase() {
-	local testcase_name="$1"
-	printf '\t\t<testcase name="%s">\n' "$testcase_name"
+	local testsuite_name="$1"
+	local testcase_name="$2"
+	printf '\t\t<testcase classname="%s" name="%s">\n' "$testsuite_name" "$testcase_name"
 	while IFS= read -r line; do
 		case "${line:0:1}" in
 			F)
@@ -237,7 +238,7 @@ junit_testsuite() {
 			C)
 				local testcase_name
 				testcase_name=$(echo "${line:3}" | cut -d ' ' -f 1)
-				junit_testcase "$testcase_name"
+				junit_testcase "$testsuite_name" "$testcase_name"
 				;;
 			*)
 				break
